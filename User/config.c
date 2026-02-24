@@ -41,9 +41,11 @@ static void cfg_handler(const char *section,
             g_cfg.net.dhcp = atoi(value);
         else if (strcmp(key, "join_multicast") == 0)
             g_cfg.net.join_multicast = atoi(value);
-        else if (strcmp(key, "port") == 0)
-            g_cfg.net.port = atoi(value);
-        else if (strcmp(key, "fallback_ip") == 0){
+        else if (strcmp(key, "use_dcs_ip") == 0)
+            g_cfg.net.useDCSIP = atoi(value);
+        else if (strcmp(key, "dcs_port") == 0)
+            g_cfg.net.dcs_port = atoi(value);
+        else if (strcmp(key, "module_ip") == 0){
             // Use strtok to get the first octet
             octet = strtok(value, ".");
             g_cfg.net.ip[0] = atoi(octet);
@@ -70,6 +72,21 @@ static void cfg_handler(const char *section,
             }
             octet = 0;
             place = 1;
+        }
+        else if (strcmp(key, "dcs_ip") == 0){
+            // Use strtok to get the first octet
+            octet = strtok(value, ".");
+            g_cfg.net.dcsip[0] = atoi(octet);
+            // Loop through the rest of the string to get the remaining octets
+            while (octet != NULL) {
+                // Call strtok again with NULL as the first argument to continue tokenizing the same string
+                octet = strtok(NULL, ".");
+                g_cfg.net.dcsip[place] = atoi(octet);
+                place++;
+            }
+            octet = 0;
+            place = 1;
+            
         }
         else if (strcmp(key, "gateway") == 0){
             // Use strtok to get the first octet

@@ -11,12 +11,13 @@ uint32_t millis(void);
 typedef struct {
     uint8_t dhcp;
     uint8_t join_multicast;
-    uint8_t mac[6];          // <-- ADD THIS
+    uint8_t useDCSIP;
+    uint8_t mac[6];
     uint8_t ip[4];
     uint8_t mask[4];
     uint8_t gw[4];
-    uint8_t multicast_ip[4];
-    uint16_t port;
+    uint8_t dcsip[4];
+    uint16_t dcs_port;
 } net_config_t;
 
 typedef struct {

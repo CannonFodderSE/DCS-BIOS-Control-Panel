@@ -114,12 +114,13 @@ please refer to the "CH32V30x Evaluation Board Manual" under the CH32V307EVT\EVT
 #define MY_UDP_BUF_LEN                          45
 
 u8 MACAddr[6];                                        //MAC address
-u16 srcport = 1000;                                   //source port
-u16 BroadcastPort = 7778;                             //Broadcast port
 u8 IPAddr[4] = {192, 168, 0, 10};                     //IP address
 u8 GWIPAddr[4] = {192, 168, 0, 1};                    //Gateway IP address
 u8 IPMask[4] = {255, 255, 255, 0};                    //subnet mask
-u8 BroadcastAddr[4] = {192, 168, 0, 255};             //Broadcast IP address
+u8 BroadcastIP[4]   = {0, 0, 0, 0};              //Broadcast IP address
+u8 DCSIPAddr[4] = {192, 168, 0, 202};                 //IP address
+u16 DCSPort = 7778;                                   //DCS-BIOS receiving port
+u16 srcport = 5010;                                   //DCS-BIOS sending port (not implemented at this time)
 u8 SocketId;
 u8 SocketMyBuf[MY_UDP_BUF_LEN] = "This is a test\n";  // socket receive buffer
 u8 SocketRecvBuf[UDP_RECE_BUF_LEN];                   //socket receive buffer
@@ -136,7 +137,9 @@ static button_state_t btn_state[MAX_BUTTONS];
 typedef struct {
     uint8_t last_state;
     uint32_t last_change;
+    int8_t  accum;          // NEW: step accumulator
 } encoder_state_t;
+
 
 static encoder_state_t enc_state[MAX_ENCODERS];
 
@@ -157,7 +160,8 @@ static uint8_t read_encoder_state(int idx)
 {
     uint8_t a = GPIO_ReadPin(g_cfg.encoders[idx].a_pin) ? 1 : 0;
     uint8_t b = GPIO_ReadPin(g_cfg.encoders[idx].b_pin) ? 1 : 0;
-    return (a << 1) | b;
+    //return (a << 1) | b;
+    return (b << 1) | a;
 }
 
 /* Common */
@@ -205,39 +209,21 @@ void TIM2_Init(void)
     NVIC_EnableIRQ(TIM2_IRQn);
 }
 
-/*********************************************************************
- * @fn      Calculate broadcast IP
- *
- * @brief   Calculate broadcast IP address from IP address and netmask.
- *
- * @return  none
- */
+/* -------------------------------------------------- */
+/* Calculate broadcast IP                             */
+/* -------------------------------------------------- */
 void CalcBroadcastIP(uint8_t *ip, uint8_t *mask)
 {
+    printf("[CALCBROADCASTIP] Using Broadcast IP = ");
     for (int i = 0; i < 4; i++)
     {
-        BroadcastAddr[i] = ip[i] | (~mask[i]);
+        //BroadcastIP[i] = ip[i] | (~mask[i]);
+        //printf("%d.",BroadcastIP[i]);
+        DCSIPAddr[i] = ip[i] | (~mask[i]);
+        printf("%d.",DCSIPAddr[i]);
     }
-}
-
-/*********************************************************************
- * @fn      Send UDP packet
- *
- * @brief   Send UDP packet containing message stored in "SocketMyBuf".
- *
- * @return  none
- */
-void UdpSend(){
-    u32 len;
-    len = sizeof(SocketMyBuf);
+    printf("\r\n");
     
-    WCHNET_SocketUdpSendTo(
-        SocketId, 
-        SocketMyBuf, 
-        &len, 
-        BroadcastAddr, 
-        BroadcastPort
-    );
 }
 
 /*********************************************************************
@@ -254,6 +240,7 @@ void UdpSend(){
  */
 void WCHNET_UdpServerRecv(struct _SOCK_INF *socinf, u32 ipaddr, u16 port, u8 *buf, u32 len)
 {
+    return;   // Below code not need for sending only
     u8 ip_addr[4], i;
 
     printf("Remote IP:");
@@ -267,18 +254,17 @@ void WCHNET_UdpServerRecv(struct _SOCK_INF *socinf, u32 ipaddr, u16 port, u8 *bu
             socinf->SockIndex);
 
     WCHNET_SocketUdpSendTo(socinf->SockIndex, buf, &len, ip_addr, port);
-    UdpSend();
+    //UdpSend();
 }
 
 /*********************************************************************
- * @fn      WCHNET_CreateUdpSocket
+ * @fn      Send UDP packet
  *
- * @brief   Create UDP Socket
+ * @brief   Send UDP packet containing message stored in "SocketMyBuf".
  *
  * @return  none
  */
-void WCHNET_CreateUdpSocket(void)
-{
+void UdpSend(){
     u8 i;
     SOCK_INF TmpSocketInf;
 
@@ -289,9 +275,44 @@ void WCHNET_CreateUdpSocket(void)
     TmpSocketInf.RecvStartPoint = (u32) SocketRecvBuf;
     TmpSocketInf.AppCallBack = WCHNET_UdpServerRecv;
     i = WCHNET_SocketCreat(&SocketId, &TmpSocketInf);
-    printf("SocketId %d\r\n", SocketId);
-    mStopIfError(i);
+    mStopIfError(i);u32 len;
+    //len = sizeof(SocketMyBuf);
+    len = strlen(SocketMyBuf);
+    //printf("%s\r\n",SocketMyBuf);  // Uncomment for debugging
+    WCHNET_SocketUdpSendTo(
+        SocketId, 
+        SocketMyBuf, 
+        &len, 
+        DCSIPAddr, 
+        DCSPort
+    );
+    
+    WCHNET_SocketClose(SocketId, TCP_CLOSE_RST);     //reset the connection and close
+    
 }
+
+/*********************************************************************
+ * @fn      WCHNET_CreateUdpSocket
+ *
+ * @brief   Create UDP Socket
+ *
+ * @return  none
+ */
+/* void WCHNET_CreateUdpSocket(void)
+{
+    return;
+    u8 i;
+    SOCK_INF TmpSocketInf;
+
+    memset((void *) &TmpSocketInf, 0, sizeof(SOCK_INF));
+    TmpSocketInf.SourPort = srcport;
+    TmpSocketInf.ProtoType = PROTO_TYPE_UDP;
+    TmpSocketInf.RecvBufLen = UDP_RECE_BUF_LEN;
+    TmpSocketInf.RecvStartPoint = (u32) SocketRecvBuf;
+    TmpSocketInf.AppCallBack = WCHNET_UdpServerRecv;
+    i = WCHNET_SocketCreat(&SocketId, &TmpSocketInf);
+    mStopIfError(i);
+} */
 
 /*********************************************************************
  * @fn      WCHNET_HandleSockInt
@@ -303,7 +324,7 @@ void WCHNET_CreateUdpSocket(void)
  *
  * @return  none
  */
-void WCHNET_HandleSockInt(u8 socketid, u8 intstat)
+/* void WCHNET_HandleSockInt(u8 socketid, u8 intstat)
 {
     if (intstat & SINT_STAT_RECV)                               //receive data
     {
@@ -320,7 +341,7 @@ void WCHNET_HandleSockInt(u8 socketid, u8 intstat)
     {
         printf("TCP Timeout\r\n");
     }
-}
+} */
 
 /*********************************************************************
  * @fn      WCHNET_HandleGlobalInt
@@ -333,7 +354,7 @@ void WCHNET_HandleGlobalInt(void)
 {
     u8 intstat;
     u16 i;
-    u8 socketint;
+    //u8 socketint;
 
     intstat = WCHNET_GetGlobalInt();                              //get global interrupt flag
     if (intstat & GINT_STAT_UNREACH)                              //Unreachable interrupt
@@ -350,13 +371,13 @@ void WCHNET_HandleGlobalInt(void)
         if (i & PHY_Linked_Status)
             printf("PHY Link Success\r\n");
     }
-    if (intstat & GINT_STAT_SOCKET) {                             //socket related interrupt
+    /* if (intstat & GINT_STAT_SOCKET) {                             //socket related interrupt
         for (i = 0; i < WCHNET_MAX_SOCKET_NUM; i++) {
             socketint = WCHNET_GetSocketInt(i);
             if (socketint)
                 WCHNET_HandleSockInt(i, socketint);
         }
-    }
+    } */
 }
 
 /*********************************************************************
@@ -379,6 +400,46 @@ void Button_Init(void)
 }
 
 /*********************************************************************
+ * @fn      SEND_STATE
+ *
+ * @brief   Set cockpit switches to current state of buttons and switches
+ *
+ * @return  none
+ */
+void SEND_STATE(){
+    printf("[SEND_STATE]\r\n");
+    char set[4] = " 1\n";
+    char unset[4] = " 0\n";
+
+    for (int i = 1; i < g_cfg.button_count; i++)
+    {
+        printf("[SEND_STATE] %d Press -> %s\r\n",i, g_cfg.buttons[i].press_text);  // Uncomment for debug message to console
+        char token[MAX_TEXT_LEN];
+        const char s[2] = " "; 
+        uint8_t val = GPIO_ReadPin(g_cfg.buttons[i].pin);
+        strncpy(token,g_cfg.buttons[i].press_text, MAX_TEXT_LEN);
+        if (strtok(token, s) == NULL){
+            strncpy(token,g_cfg.buttons[i].press_text, MAX_TEXT_LEN);
+        }
+        switch(val)
+        {
+            case 0:
+                strcat(token, set);
+                break;
+        
+            default:
+                strcat(token, unset);
+                break;
+        }
+        
+        printf("[SEND_STATE] %d Press -> %s\r\n\r\n",i, token);  // Uncomment for debug message to console
+        
+        //memcpy(SocketMyBuf,g_cfg.buttons[i].press_text,sizeof(g_cfg.buttons[i].press_text));
+        memcpy(SocketMyBuf,token,strlen(token));
+        //UdpSend();    
+    }
+}
+/*********************************************************************
  * @fn      Button_Task
  *
  * @brief   Scans GPIO pins assigned to buttons for pressed or released state
@@ -396,29 +457,28 @@ void Button_Task(void)
         {
             if ((millis() - btn_state[i].last_change) >= g_cfg.debounce_ms)
             {
-                printf("[BTN] %d Press -> %d\r\n", i, val);
+                //printf("[BTN] %d Press -> %d\r\n", i, val);  // Uncomment for debug message to console
                 btn_state[i].last_state = val;
                 btn_state[i].last_change = millis();
-
+                
                 if (val == 0)
                 {
-                    printf("[BTN] %d Press -> %s\r\n",
-                                i, g_cfg.buttons[i].press_text);
-                    
-                    memcpy(SocketMyBuf,g_cfg.buttons[i].press_text,sizeof(g_cfg.buttons[i].press_text));
-                    printf("len of SocketMyBuf %d", strlen(SocketMyBuf));
-                    UdpSend();
-                    
+                    printf("[BTN] %d Press -> %s\r\n",i, g_cfg.buttons[i].press_text);  // Uncomment for debug message to console
+                    if(i == 0){
+                        SEND_STATE();
+                    } else {
+                        memcpy(SocketMyBuf,g_cfg.buttons[i].press_text,sizeof(g_cfg.buttons[i].press_text));
+                        UdpSend();    
+                    }
                 }
                 else
                 {
-                    printf("[BTN] %d Release -> %s\r\n",
-                                i, g_cfg.buttons[i].release_text);
+                    printf("[BTN] %d Release -> %s\r\n",i, g_cfg.buttons[i].release_text);  // Uncomment for debug message to console
                     
-                    memcpy(SocketMyBuf,g_cfg.buttons[i].release_text,sizeof(g_cfg.buttons[i].press_text));
-                    printf("len of SocketMyBuf %d", strlen(SocketMyBuf));
-                    UdpSend();
-                    
+                    if(i!=0){
+                        memcpy(SocketMyBuf,g_cfg.buttons[i].release_text,sizeof(g_cfg.buttons[i].press_text));
+                        UdpSend();
+                    }
                 }
             }
         }
@@ -443,17 +503,64 @@ void Encoder_Init(void)
 
         enc_state[i].last_state  = read_encoder_state(i);
         enc_state[i].last_change = millis();
+        enc_state[i].accum = 0;
     }
 }
 
 /*********************************************************************
  * @fn      Encoder_Task
  *
- * @brief   Scans GPIO pins assigned to encoders for direction of rotation
+ * @brief   Scans GPIO pins assigned to encoders for rotation
  *          Sends associated message via UDP
  *
  * @return  none
  */
+/* void Encoder_Task_Alternate(void)
+{
+    for (int i = 0; i < g_cfg.encoder_count; i++)
+    {
+        uint8_t state = read_encoder_state(i);
+
+        switch (enc_state[i].last_state)
+        {
+            case 0: if (state == 1) enc_state[i].accum++;
+                    if (state == 2) enc_state[i].accum--;
+                    break;
+
+            case 1: if (state == 3) enc_state[i].accum++;
+                    if (state == 0) enc_state[i].accum--;
+                    break;
+
+            case 3: if (state == 2) enc_state[i].accum++;
+                    if (state == 1) enc_state[i].accum--;
+                    break;
+
+            case 2: if (state == 0) enc_state[i].accum++;
+                    if (state == 3) enc_state[i].accum--;
+                    break;
+        }
+        //printf("enc_state[i].accum = %d\r\n",enc_state[i].accum);
+        if (enc_state[i].accum >= 2)
+        {
+            printf("cw\r\n");  // Uncomment for debugging
+            printf("%s\r\n",g_cfg.encoders[i].cw_text);  // Uncomment for debugging
+            strcpy((char*)SocketMyBuf, g_cfg.encoders[i].cw_text);
+            UdpSend();
+            enc_state[i].accum = 0;
+        }
+        else if (enc_state[i].accum <= -2)
+        {
+            printf("ccw\r\n");  // Uncomment for debugging
+            printf("%s\r\n",g_cfg.encoders[i].ccw_text);  // Uncomment for debugging
+            strcpy((char*)SocketMyBuf, g_cfg.encoders[i].ccw_text);
+            UdpSend();
+            enc_state[i].accum = 0;
+        }
+
+        enc_state[i].last_state = state;
+    }
+} */
+
 void Encoder_Task(void)
 {
     for (int i = 0; i < g_cfg.encoder_count; i++)
@@ -463,37 +570,107 @@ void Encoder_Task(void)
 
         if (new_state != old_state)
         {
-            if ((millis() - enc_state[i].last_change) >= g_cfg.debounce_ms)
+            uint8_t idx = (old_state << 2) | new_state;
+            int8_t dir = quad_table[idx];
+            printf("old=%d new=%d idx=%d dir=%d\r\n",old_state, new_state, idx, dir);
+            if (dir != 0)
             {
-                uint8_t idx = (old_state << 2) | new_state;
-                int8_t dir = quad_table[idx];
+                printf("dir = %d\r\n",dir);
+                    enc_state[i].accum += dir;
 
-                if (dir == +1)
+                if (enc_state[i].accum >= 2)
                 {
-                    printf("[ENC] %d CW -> %s\r\n",
-                                i, g_cfg.encoders[i].cw_text);
-                    
-                    memcpy(SocketMyBuf,g_cfg.encoders[i].cw_text,sizeof(g_cfg.encoders[i].cw_text));
-                    printf("len of SocketMyBuf %d", strlen(SocketMyBuf));
+                    printf("cw\r\n");
+                    strcpy((char*)SocketMyBuf, g_cfg.encoders[i].cw_text);
                     UdpSend();
-                    
+                    enc_state[i].accum = 0;
                 }
-                else if (dir == -1)
+                else if (enc_state[i].accum <= -2)
                 {
-                    printf("[ENC] %d CCW -> %s\r\n",
-                                i, g_cfg.encoders[i].ccw_text);
-                    
-                    memcpy(SocketMyBuf,g_cfg.encoders[i].ccw_text,sizeof(g_cfg.encoders[i].ccw_text));
-                    printf("len of SocketMyBuf %d", strlen(SocketMyBuf));
+                    printf("ccw\r\n");
+                    strcpy((char*)SocketMyBuf, g_cfg.encoders[i].ccw_text);
                     UdpSend();
-                    
+                    enc_state[i].accum = 0;
                 }
-
-                enc_state[i].last_state = new_state;
-                enc_state[i].last_change = millis();
             }
+
+            enc_state[i].last_state = new_state;
         }
     }
+}
+
+
+/*********************************************************************
+ * @fn      Network_init
+ *
+ * @brief   Configures network as set in "dcs_config.ini.inc"
+ *
+ * @return  none
+ */
+
+void Network_init(){
+    u8 i;
+
+    // Populate network info from configuration
+    MACAddr[0] = g_cfg.net.mac[0] & 0xff;
+    MACAddr[1] = g_cfg.net.mac[1] & 0xff;
+    MACAddr[2] = g_cfg.net.mac[2] & 0xff;
+    MACAddr[3] = g_cfg.net.mac[3] & 0xff;
+    MACAddr[4] = g_cfg.net.mac[4] & 0xff;
+    MACAddr[5] = g_cfg.net.mac[5] & 0xff;
+    IPAddr[0] = g_cfg.net.ip[0] & 0xff;
+    IPAddr[1] = g_cfg.net.ip[1] & 0xff;
+    IPAddr[2] = g_cfg.net.ip[2] & 0xff;
+    IPAddr[3] = g_cfg.net.ip[3] & 0xff;
+    IPMask[0] = g_cfg.net.mask[0] & 0xff;
+    IPMask[1] = g_cfg.net.mask[1] & 0xff;
+    IPMask[2] = g_cfg.net.mask[2] & 0xff;
+    IPMask[3] = g_cfg.net.mask[3] & 0xff;
+    GWIPAddr[0] = g_cfg.net.gw[0] & 0xff;
+    GWIPAddr[1] = g_cfg.net.gw[1] & 0xff;
+    GWIPAddr[2] = g_cfg.net.gw[2] & 0xff;
+    GWIPAddr[3] = g_cfg.net.gw[3] & 0xff;
+    
+    // Use Broadcast IP address or DCS's computer IP address
+    // Determined by "use_dcs_ip" in "dcs_config.ini.inc"
+    if(g_cfg.net.useDCSIP){ // "use_dcs_ip" set to 1
+        DCSIPAddr[1]= g_cfg.net.dcsip[0] & 0xff;
+        DCSIPAddr[1]= g_cfg.net.dcsip[1] & 0xff;
+        DCSIPAddr[2]= g_cfg.net.dcsip[2] & 0xff;
+        DCSIPAddr[3]= g_cfg.net.dcsip[3] & 0xff;
+    } else{ // "use_dcs_ip" set to 0
+        CalcBroadcastIP(IPAddr, IPMask);
+    }
+    DCSPort = g_cfg.net.dcs_port;
+
+    // Check for user assigned MAC address
+    int userMac = 0;
+    for(int i = 0; i < 6; i++){
+        userMac += MACAddr[i];
+    }
+    // If user assigned MAC address is configured use it
+    // Otherwise, use the chip MAC address
+    if(!userMac){
+        WCHNET_GetMacAddr(MACAddr);  // get the chip MAC address
+    }
+    printf("[NETWORKT_INIT] mac addr:");
+    for(i = 0; i < 6; i++) 
+        printf("%x ",MACAddr[i]);
+    printf("\r\n");
+    
+    i = ETH_LibInit(IPAddr, GWIPAddr, IPMask, MACAddr);  // Ethernet library initialization
+    mStopIfError(i);
+    if (i == WCHNET_ERR_SUCCESS)
+        printf("[NETWORKT_INIT] WCHNET_LibInit Success\r\n");
+    
+    printf("[NETWORKT_INIT] IPAddr = %d.%d.%d.%d\r\n",IPAddr[0],IPAddr[1],IPAddr[2],IPAddr[3]);
+
+    printf("[NETWORKT_INIT] GWIPAddr = %d.%d.%d.%d\r\n",GWIPAddr[0],GWIPAddr[1],GWIPAddr[2],GWIPAddr[3]);
+
+    printf("[NETWORKT_INIT] DCSIPAddr = %d.%d.%d.%d\r\n",DCSIPAddr[0],DCSIPAddr[1],DCSIPAddr[2],DCSIPAddr[3]);
+    
+    printf("[NETWORKT_INIT] DCSPort = %d\r\n",DCSPort);
+    
 }
 
 /*********************************************************************
@@ -505,8 +682,6 @@ void Encoder_Task(void)
  */
 int main(void)
 {
-    u8 i;
-
     SystemCoreClockUpdate();
     Delay_Init();
     USART_Printf_Init(115200);  // USART initialize
@@ -523,56 +698,12 @@ int main(void)
 
     Config_Load();    // Reads configuration as definded in "dcs_config.ini.inc"
 
-    // Populate network info from configuration
-    IPAddr[0] = g_cfg.net.ip[0] & 0xff;
-    IPAddr[1] = g_cfg.net.ip[1] & 0xff;
-    IPAddr[2] = g_cfg.net.ip[2] & 0xff;
-    IPAddr[3] = g_cfg.net.ip[3] & 0xff;
-    IPMask[0] = g_cfg.net.mask[0] & 0xff;
-    IPMask[1] = g_cfg.net.mask[1] & 0xff;
-    IPMask[2] = g_cfg.net.mask[2] & 0xff;
-    IPMask[3] = g_cfg.net.mask[3] & 0xff;
-    GWIPAddr[0] = g_cfg.net.gw[0] & 0xff;
-    GWIPAddr[1] = g_cfg.net.gw[1] & 0xff;
-    GWIPAddr[2] = g_cfg.net.gw[2] & 0xff;
-    GWIPAddr[3] = g_cfg.net.gw[3] & 0xff;
-    MACAddr[0] = g_cfg.net.mac[0] & 0xff;
-    MACAddr[1] = g_cfg.net.mac[1] & 0xff;
-    MACAddr[2] = g_cfg.net.mac[2] & 0xff;
-    MACAddr[3] = g_cfg.net.mac[3] & 0xff;
-    MACAddr[4] = g_cfg.net.mac[4] & 0xff;
-    MACAddr[5] = g_cfg.net.mac[5] & 0xff;
+    Network_init();  // Initialize network as defined in Config_Load function
 
-    // Check for user assigned MAC address
-    int userMac = 0;
-    for(int i = 0; i < 6; i++){
-        userMac += MACAddr[i];
-    }
-    // If user assigned MAC address is configured use it
-    // Otherwise, use the chip MAC address
-    if(!userMac){
-        WCHNET_GetMacAddr(MACAddr);  // get the chip MAC address
-    }
-    printf("[MAIN] mac addr:");
-    for(i = 0; i < 6; i++) 
-        printf("%x ",MACAddr[i]);
-    printf("\r\n");
-    
     Encoder_Init();   // Initialize pins for encoder as defined in Config_Load function
 
     Button_Init();   // Initialize pins for buttons as defined in Config_Load function
 
-    
-    i = ETH_LibInit(IPAddr, GWIPAddr, IPMask, MACAddr);  // Ethernet library initialization
-    mStopIfError(i);
-    if (i == WCHNET_ERR_SUCCESS)
-        printf("[MAIN] WCHNET_LibInit Success\r\n");
-    
-    CalcBroadcastIP(IPAddr, IPMask);  // Caluculate Broadcast IP address from IP addres and netmask
-    printf("[MAIN] BroadcastAddr = %d.%d.%d.%d\r\n",BroadcastAddr[0],BroadcastAddr[1],BroadcastAddr[2],BroadcastAddr[3]);
-    
-    WCHNET_CreateUdpSocket();  // Create  UDP Socket
-    printf("[MAIN] IPAddr = %d.%d.%d.%d\r\n",IPAddr[0],IPAddr[1],IPAddr[2],IPAddr[3]);
     
     while(1)
     {
@@ -580,7 +711,7 @@ int main(void)
 
         Encoder_Task();
 
-        // This section is only needes for incoming packets
+        // This section is only needed for incoming packets
         // Currently only sending
         /*Ethernet library main task function,
          * which needs to be called cyclically*/
